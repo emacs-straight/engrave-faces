@@ -21,14 +21,28 @@ When preset, short commands are generated for `engrave-faces-preset-styles'."
   :type '(choice nil preset)
   :group 'engrave-faces)
 
-(defun engrave-faces-latex-gen-preamble ()
+(defcustom engrave-faces-latex-colorbox-strut
+  "\\vrule height 2.1ex depth 0.8ex width 0pt"
+  "LaTeX code which sets the height and depth for any colorboxes."
+  :type 'string
+  :group 'engrave-faces)
+
+(defun engrave-faces-latex-gen-preamble (&optional theme)
   "Generate a preamble which provides short commands for the preset styles.
 See `engrave-faces-preset-styles' and `engrave-faces-latex-output-style'."
-  (mapconcat
-   (lambda (face-style)
-     (engrave-faces-latex-gen-preamble-line (car face-style) (cdr face-style)))
-   engrave-faces-preset-styles
-   "\n"))
+  (let ((preset-style
+         (if theme
+             (engrave-faces-get-theme theme)
+           engrave-faces-current-preset-style)))
+    (concat
+     (unless (cl-notany (lambda (s) (plist-get (cdr s) :background))
+                        preset-style)
+       (format "\\newcommand\\efstrut{%s}\n" engrave-faces-latex-colorbox-strut))
+     (mapconcat
+      (lambda (face-style)
+        (engrave-faces-latex-gen-preamble-line (car face-style) (cdr face-style)))
+      preset-style
+      "\n"))))
 
 (defun engrave-faces-latex-gen-preamble-line (face style)
   "Generate a LaTeX preamble line for STYLE representing FACE."
@@ -41,11 +55,15 @@ See `engrave-faces-preset-styles' and `engrave-faces-latex-output-style'."
     (concat (when fg (format "\\definecolor{EF%s}{HTML}{%s}\n" short (substring fg 1)))
             (when bg (format "\\definecolor{Ef%s}{HTML}{%s}\n" short (substring bg 1)))
             "\\newcommand{\\EF" short "}[1]{"
-            (when bg (concat "\\colorbox{Ef" short "}{"))
+            (when (and bg (not (eq face 'default)))
+              (concat "\\colorbox{Ef" short "}{\\efstrut{}"))
             (when fg (concat "\\textcolor{EF" short "}{"))
             (when st "\\sout{") (when bl "\\textbf{") (when it "\\textit{")
             "#1}"
-            (when bg "}") (when fg "}") (when st "}") (when bl "}") (when it "}")
+            (make-string
+             (cl-count-if #'identity
+                          (list (and bg (not (eq face 'default))) fg st bl it))
+             ?})
             " % " (symbol-name face))))
 
 (defun engrave-faces-latex-face-apply (faces content)
@@ -98,15 +116,16 @@ See `engrave-faces-preset-styles' and `engrave-faces-latex-output-style'."
   (goto-char (point-min))
   (insert "\\documentclass{article}
 
+
+\\usepackage[margin=1.5cm]{geometry}
 \\usepackage{xcolor}
 \\usepackage{fvextra}
-\\usepackage[margin=1.5cm]{geometry}
 \\usepackage{sourcecodepro}
 \\pagestyle{empty}\n\n"
           (engrave-faces-latex-gen-preamble)
           "
 \\begin{document}
-
+\\setlength{\\fboxsep}{0pt}
 \\begin{Verbatim}[breaklines=true, commandchars=\\\\\\{\\}]\n")
   (goto-char (point-max))
   (insert "\\end{Verbatim}

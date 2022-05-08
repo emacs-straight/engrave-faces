@@ -63,7 +63,17 @@ buffer.  You may use them to modify the outlook of the final output."
   :group 'engrave-faces
   :type 'hook)
 
+(defcustom engrave-faces-log-preset-missed-faces nil
+  "Whether to log faces not found in `engrave-faces-current-preset-style'."
+  :type 'boolean
+  :group 'engrave-faces)
+
+(defvar engrave-faces-preset-missed-faces nil
+  "Faces not found in `engrave-faces-current-preset-style'.")
+
 (defvar engrave-faces--backends nil)
+
+(define-obsolete-variable-alias 'engrave-faces-preset-styles 'engrave-faces-current-preset-style "0.3")
 
 ;;;###autoload
 (defmacro engrave-faces-define-backend (backend extension face-transformer &optional standalone-transformer view-setup)
@@ -79,103 +89,109 @@ If STANDALONE-TRANSFORMER is given it will be used when directly creating a file
 and cause a -standalone version of the buffer transforming function to be created."
   `(progn (add-to-list 'engrave-faces--backends
                        (list ,backend :face-transformer ,face-transformer :extension ,extension))
-          (defun ,(intern (concat "engrave-faces-" backend "-buffer")) (&optional switch-to-result)
+          (defun ,(intern (concat "engrave-faces-" backend "-buffer")) (&optional theme switch-to-result)
             ,(concat "Convert buffer to " backend " formatting.")
-            (interactive '(t))
-            (let ((buf (engrave-faces-buffer ,backend)))
+            (interactive '(nil t))
+            (let ((buf (engrave-faces-buffer ,backend theme)))
               (when switch-to-result
                 (switch-to-buffer buf)
                 ,(when view-setup `(funcall ,view-setup)))
               buf))
           ,(when standalone-transformer
-             `(defun ,(intern (concat "engrave-faces-" backend "-buffer-standalone")) (&optional switch-to-result)
-                (interactive '(t))
+             `(defun ,(intern (concat "engrave-faces-" backend "-buffer-standalone")) (&optional theme switch-to-result)
+                (interactive '(nil t))
                 ,(concat "Export the current buffer to a standalone " backend " buffer.")
-                (let ((buf (engrave-faces-buffer ,backend)))
+                (let ((buf (engrave-faces-buffer ,backend theme)))
                   (with-current-buffer buf
                     (funcall ,standalone-transformer))
                   (when switch-to-result
                     (switch-to-buffer buf)
                     ,(when view-setup `(funcall ,view-setup)))
                   buf)))
-          (defun ,(intern (concat "engrave-faces-" backend "-file")) (file &optional open-result)
+          (defun ,(intern (concat "engrave-faces-" backend "-file")) (file &optional out-file theme open-result)
             ,(concat "Convert file to " backend " formatting.")
-            (interactive (list buffer-file-name t))
-            (let ((output-file (engrave-faces-file file ,extension ,backend ,standalone-transformer)))
-              (when open-result (find-file output-file))
-              output-file))
+            (interactive (list buffer-file-name nil nil t))
+            (unless out-file
+              (setq out-file (concat file ,extension)))
+            (engrave-faces-file file out-file ,backend theme ,standalone-transformer)
+            (when open-result (find-file out-file))
+            out-file)
           (defvar ,(intern (concat "engrave-faces-" backend "-before-hook")) nil)
           (defvar ,(intern (concat "engrave-faces-" backend "-after-hook")) nil)))
 
-(defun engrave-faces-file (file extension backend &optional postprocessor)
-  "Using BACKEND, engrave FILE and save it as FILE.EXTENSION.
+(defun engrave-faces-file (in-file out-file backend &optional theme postprocessor)
+  "Using BACKEND, engrave IN-FILE and save it as FILE.EXTENSION.
 If a POSTPROCESSOR function is provided, it is called before saving."
-  (let ((output-file (concat file extension)))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (let ((buffer-file-name file))
-        (normal-mode)
-        (with-current-buffer (engrave-faces-buffer backend)
-          (when postprocessor (funcall postprocessor))
-          (write-region (point-min) (point-max) output-file)
-          (kill-buffer))))
-    output-file))
+  (with-temp-buffer
+    (insert-file-contents in-file)
+    (let ((buffer-file-name in-file))
+      (normal-mode)
+      (with-current-buffer (engrave-faces-buffer backend theme)
+        (when postprocessor (funcall postprocessor))
+        (write-region (point-min) (point-max) out-file)
+        (kill-buffer)))))
 
-(defun engrave-faces-buffer (backend)
+(defun engrave-faces-buffer (backend &optional theme)
   "Export the current buffer with BACKEND and return the created buffer."
-  (save-excursion
-    ;; Protect against the hook changing the current buffer.
+  (let ((engrave-faces-current-preset-style
+         (if theme
+             (engrave-faces-get-theme theme)
+           engrave-faces-current-preset-style)))
     (save-excursion
-      (run-hooks 'engrave-faces-before-hook)
-      (run-hooks (intern (concat "engrave-faces-" backend "-before-hook"))))
-    ;; Convince font-lock support modes to fontify the entire buffer
-    ;; in advance.
-    (when (and (boundp 'jit-lock-mode)
-               (symbol-value 'jit-lock-mode))
-      (jit-lock-fontify-now (point-min) (point-max)))
-    (font-lock-ensure)
+      ;; Protect against the hook changing the current buffer.
+      (save-excursion
+        (run-hooks 'engrave-faces-before-hook)
+        (run-hooks (intern (concat "engrave-faces-" backend "-before-hook"))))
+      ;; Convince font-lock support modes to fontify the entire buffer
+      ;; in advance.
+      (when (and (boundp 'jit-lock-mode)
+                 (symbol-value 'jit-lock-mode))
+        (jit-lock-fontify-now (point-min) (point-max)))
+      (font-lock-ensure)
+      ;; It's important that the new buffer inherits default-directory
+      ;; from the current buffer.
+      (let ((engraved-buf
+             (generate-new-buffer
+              (if (buffer-file-name)
+                  (concat (file-name-nondirectory (buffer-file-name))
+                          (plist-get (cdr (assoc backend engrave-faces--backends)) :extension))
+                (concat "*" backend "*"))))
+            (face-transformer (plist-get (cdr (assoc backend engrave-faces--backends)) :face-transformer))
 
-    ;; It's important that the new buffer inherits default-directory
-    ;; from the current buffer.
-    (let ((engraved-buf (generate-new-buffer (if (buffer-file-name)
-                                                 (concat (file-name-nondirectory (buffer-file-name))
-                                                         (plist-get (cdr (assoc backend engrave-faces--backends)) :extension))
-                                               (concat "*" backend "*"))))
-          (face-transformer (plist-get (cdr (assoc backend engrave-faces--backends)) :face-transformer))
-          (completed nil))
-      (unwind-protect
-          (let (next-change text)
-            ;; This loop traverses and reads the source buffer, appending the
-            ;; resulting text to the export buffer. This method is fast because:
-            ;; 1) it doesn't require examining the text properties char by char
-            ;; (engrave-faces--next-face-change is used to move between runs with
-            ;; the same face), and 2) it doesn't require frequent buffer
-            ;; switches, which are slow because they rebind all buffer-local
-            ;; vars.
-            (goto-char (point-min))
-            (while (not (eobp))
-              (setq next-change (engrave-faces--next-face-change (point)))
-              (setq text (buffer-substring-no-properties (point) next-change))
-              ;; Don't bother writing anything if there's no text (this
-              ;; happens in invisible regions).
-              (when (> (length text) 0)
-                (princ (funcall face-transformer
-                                (let ((prop (get-text-property (point) 'face)))
-                                  (cond
-                                   ((null prop) 'default)
-                                   ((and (listp prop) (eq (car prop) 'quote))
-                                    (eval prop t))
-                                   (t prop)))
-                                text)
-                       engraved-buf))
-              (goto-char next-change)))
-        (setq completed t))
-      (if (not completed)
-          (kill-buffer engraved-buf)
-        (with-current-buffer engraved-buf
-          (run-hooks 'engrave-faces-after-hook)
-          (run-hooks (intern (concat "engrave-faces-" backend "-after-hook"))))
-        engraved-buf))))
+            (completed nil))
+        (unwind-protect
+            (let (next-change text)
+              ;; This loop traverses and reads the source buffer, appending the
+              ;; resulting text to the export buffer. This method is fast because:
+              ;; 1) it doesn't require examining the text properties char by char
+              ;; (engrave-faces--next-face-change is used to move between runs with
+              ;; the same face), and 2) it doesn't require frequent buffer
+              ;; switches, which are slow because they rebind all buffer-local
+              ;; vars.
+              (goto-char (point-min))
+              (while (not (eobp))
+                (setq next-change (engrave-faces--next-face-change (point)))
+                (setq text (buffer-substring-no-properties (point) next-change))
+                ;; Don't bother writing anything if there's no text (this
+                ;; happens in invisible regions).
+                (when (> (length text) 0)
+                  (princ (funcall face-transformer
+                                  (let ((prop (get-text-property (point) 'face)))
+                                    (cond
+                                     ((null prop) 'default)
+                                     ((and (listp prop) (eq (car prop) 'quote))
+                                      (eval prop t))
+                                     (t prop)))
+                                  text)
+                         engraved-buf))
+                (goto-char next-change)))
+          (setq completed t))
+        (if (not completed)
+            (kill-buffer engraved-buf)
+          (with-current-buffer engraved-buf
+            (run-hooks 'engrave-faces-after-hook)
+            (run-hooks (intern (concat "engrave-faces-" backend "-after-hook"))))
+          engraved-buf)))))
 
 (defun engrave-faces-merge-attributes (faces &optional attributes)
   "Find the final ATTRIBUTES for text with FACES."
@@ -206,10 +222,13 @@ To consider inheritence, use `engrave-faces-explicit-inheritance' first."
   (delq nil (delq 'unspecified
                   (mapcar
                    (lambda (face)
-                     (if-let ((style (cdr (assoc face engrave-faces-preset-styles))))
+                     (if-let ((style (cdr (assoc face engrave-faces-current-preset-style))))
                          (plist-get style attribute)
                        (cond
-                        ((symbolp face) (face-attribute face attribute nil nil))
+                        ((symbolp face)
+                         (when engrave-faces-log-preset-missed-faces
+                           (push face engrave-faces-preset-missed-faces))
+                         (face-attribute face attribute nil nil))
                         ((listp face) (plist-get face attribute)))))
                    (delq 'default (if (listp faces) faces (list faces)))))))
 
@@ -221,8 +240,8 @@ This function is lifted from htmlize."
   ;; overlays that specify the `face' property, even when they
   ;; contain smaller text properties that also specify `face'.
   ;; Emacs display engine merges those faces, and so must we.
-  (or limit
-      (setq limit (point-max)))
+  (unless limit
+    (setq limit (point-max)))
   (let ((next-prop (next-single-property-change pos 'face nil limit))
         (overlay-faces (engrave-faces--overlay-faces-at pos)))
     (while (progn
@@ -241,46 +260,101 @@ This function is lifted from htmlize."
 
 ;;; Style helpers
 
-(defcustom engrave-faces-preset-styles ; doom-one-light
-  '((default                             :short "default"          :slug "D"     :foreground "#383a42")
-    (font-lock-keyword-face              :short "keyword"          :slug "k"     :foreground "#e45649")
-    (font-lock-doc-face                  :short "doc"              :slug "d"     :foreground "#84888b" :slant italic)
-    (font-lock-type-face                 :short "type"             :slug "t"     :foreground "#986801")
-    (font-lock-string-face               :short "string"           :slug "s"     :foreground "#50a14f")
-    (font-lock-warning-face              :short "warning"          :slug "w"     :foreground "#986801")
-    (font-lock-builtin-face              :short "builtin"          :slug "b"     :foreground "#a626a4")
-    (font-lock-comment-face              :short "comment"          :slug "ct"    :foreground "#9ca0a4")
-    (font-lock-constant-face             :short "constant"         :slug "c"     :foreground "#b751b6")
-    (font-lock-preprocessor-face         :short "preprocessor"     :slug "pp"    :foreground "#4078f2" :weight bold)
-    (font-lock-negation-char-face        :short "neg-char"         :slug "nc"    :foreground "#4078f2" :weight bold)
-    (font-lock-variable-name-face        :short "variable"         :slug "v"     :foreground "#6a1868")
-    (font-lock-function-name-face        :short "function"         :slug "f"     :foreground "#a626a4")
-    (font-lock-comment-delimiter-face    :short "comment-delim"    :slug "cd"    :foreground "#9ca0a4")
-    (font-lock-regexp-grouping-construct :short "regexp"           :slug "rc"    :foreground "#4078f2" :weight bold)
-    (font-lock-regexp-grouping-backslash :short "regexp-backslash" :slug "rb"    :foreground "#4078f2" :weight bold)
-    (org-block                           :short "org-block"        :slug "ob") ; forcing no background is preferable
-    (highlight-numbers-number            :short "number"           :slug "hn"    :foreground "#da8548" :weight bold)
-    (highlight-quoted-quote              :short "qquote"           :slug "hq"    :foreground "#4078f2")
-    (highlight-quoted-symbol             :short "qsymbol"          :slug "hs"    :foreground "#986801")
-    (rainbow-delimiters-depth-1-face     :short "rd1"              :slug "rdi"   :foreground "#4078f2")
-    (rainbow-delimiters-depth-2-face     :short "rd2"              :slug "rdii"  :foreground "#a626a4")
-    (rainbow-delimiters-depth-3-face     :short "rd3"              :slug "rdiii" :foreground "#50a14f")
-    (rainbow-delimiters-depth-4-face     :short "rd4"              :slug "rdiv"  :foreground "#da8548")
-    (rainbow-delimiters-depth-5-face     :short "rd5"              :slug "rdv"   :foreground "#b751b6")
-    (rainbow-delimiters-depth-6-face     :short "rd6"              :slug "rdvi"  :foreground "#986801")
-    (rainbow-delimiters-depth-7-face     :short "rd7"              :slug "rdvii" :foreground "#4db5bd")
-    (rainbow-delimiters-depth-8-face     :short "rd8"              :slug "rdiix" :foreground "#80a880")
-    (rainbow-delimiters-depth-9-face     :short "rd9"              :slug "rdix"  :foreground "#887070"))
+(defcustom engrave-faces-themes
+  '((default .
+      (;; faces.el --- excluding: bold, italic, bold-italic, underline, and some others
+       (default                             :short "default"             :slug "D"   :foreground "#000000")
+       (shadow                              :short "shadow"              :slug "h"   :foreground "#7f7f7f")
+       (success                             :short "success"             :slug "sc"  :foreground "#228b22" :weight bold)
+       (warning                             :short "warning"             :slug "w"   :foreground "#ff8e00" :weight bold)
+       (error                               :short "error"               :slug "e"   :foreground "#ff0000" :weight bold)
+       ;; font-lock.el
+       (font-lock-comment-face              :short "fl-comment"          :slug "c"   :foreground "#b22222")
+       (font-lock-comment-delimiter-face    :short "fl-comment-delim"    :slug "cd"  :foreground "#b22222")
+       (font-lock-string-face               :short "fl-string"           :slug "s"   :foreground "#8b2252")
+       (font-lock-doc-face                  :short "fl-doc"              :slug "d"   :foreground "#8b2252")
+       (font-lock-doc-markup-face           :short "fl-doc-markup"       :slug "m"   :foreground "#008b8b")
+       (font-lock-keyword-face              :short "fl-keyword"          :slug "k"   :foreground "#9370db")
+       (font-lock-builtin-face              :short "fl-builtin"          :slug "b"   :foreground "#483d8b")
+       (font-lock-function-name-face        :short "fl-function"         :slug "f"   :foreground "#0000ff")
+       (font-lock-variable-name-face        :short "fl-variable"         :slug "v"   :foreground "#a0522d")
+       (font-lock-type-face                 :short "fl-type"             :slug "t"   :foreground "#228b22")
+       (font-lock-constant-face             :short "fl-constant"         :slug "o"   :foreground "#008b8b")
+       (font-lock-warning-face              :short "fl-warning"          :slug "wr"  :foreground "#ff0000" :weight bold)
+       (font-lock-negation-char-face        :short "fl-neg-char"         :slug "nc")
+       (font-lock-preprocessor-face         :short "fl-preprocessor"     :slug "pp"  :foreground "#483d8b")
+       (font-lock-regexp-grouping-construct :short "fl-regexp"           :slug "rc"                        :weight bold)
+       (font-lock-regexp-grouping-backslash :short "fl-regexp-backslash" :slug "rb"                        :weight bold)
+       ;; org-faces.el
+       (org-block                           :short "org-block"           :slug "ob") ; forcing no background is preferable
+       ;; highlight-numbers.el
+       (highlight-numbers-number            :short "hl-number"           :slug "hn"  :foreground "#008b8b")
+       ;; highlight-quoted.el
+       (highlight-quoted-quote              :short "hl-qquote"           :slug "hq"  :foreground "#9370db")
+       (highlight-quoted-symbol             :short "hl-qsymbol"          :slug "hs"  :foreground "#008b8b")
+       ;; rainbow-delimiters.el
+       (rainbow-delimiters-depth-1-face     :short "rd-1"                :slug "rda" :foreground "#707183")
+       (rainbow-delimiters-depth-2-face     :short "rd-2"                :slug "rdb" :foreground "#7388d6")
+       (rainbow-delimiters-depth-3-face     :short "rd-3"                :slug "rdc" :foreground "#909183")
+       (rainbow-delimiters-depth-4-face     :short "rd-4"                :slug "rdd" :foreground "#709870")
+       (rainbow-delimiters-depth-5-face     :short "rd-5"                :slug "rde" :foreground "#907373")
+       (rainbow-delimiters-depth-6-face     :short "rd-6"                :slug "rdf" :foreground "#6276ba")
+       (rainbow-delimiters-depth-7-face     :short "rd-7"                :slug "rdg" :foreground "#858580")
+       (rainbow-delimiters-depth-8-face     :short "rd-8"                :slug "rdh" :foreground "#80a880")
+       (rainbow-delimiters-depth-9-face     :short "rd-9"                :slug "rdi" :foreground "#887070"))))
+  "A collection of named style presets.
+
+This takes the form of an alist with theme names as the cars, with
+cdrs in the form of `engrave-faces-current-preset-style'."
+  :type '(alist
+          :key-type (symbol :tag "Theme name")
+          :value-type
+          (repeat
+           (cons (symbol :tag "Face")
+                 (plist :key-type (choice
+                                   (const :tag "Short identifier" :short)
+                                   (const :tag "Very short identifier" :slug)
+                                   (symbol :tag "Face attribute")
+                                   :tag "Property")
+                        :value-type (choice :tag "Value" string symbol)
+                        :tag "Face specification"))))
+  :group 'engrave-faces)
+
+(defcustom engrave-faces-current-preset-style
+  (alist-get 'default engrave-faces-themes)
   "Overriding face values.
 
-By setting :foreground, :background, etc. a certain theme can be set for
-the faces.  The face attributes here will also be used when calculating
-inherited styles.
+This is constructed as an alist of faces, and their face attributes as a plist.
+For example, the \"default\" face coud be specified by:
+
+  (default :foreground \"#000000\" :background \"#FFFFFF\")
+
+By setting :foreground, :background, etc. a certain theme can be
+set for the faces. The face attributes here will also be used
+when calculating inherited styles.
 
 Faces here will represented more compactly when possible, by using the
-:short or :slug parameter to produce a named version styles, wheras other
-faces will need to be explicitly styled each time they're used."
-  :type '(repeat (repeat (choice symbol string)))
+:short or :slug parameter to produce a named version styles,
+- :short should be a descriptive string comprised of the character class
+  [A-Za-z0-9-_]
+- :slug should be a compact string (i.e. as short as possible), comprised of the
+  character class [A-Za-Z]
+
+For example, for the \"default\" face,
+
+  (default :short \"def\" :slug \"D\"
+           :foreground \"#000000\" :background \"#FFFFFF\")
+
+Other faces will need to be styled explicitly each time they are used."
+  :type '(repeat
+          (cons (symbol :tag "Face")
+                (plist :key-type (choice
+                                  (const :tag "Short identifier" :short)
+                                  (const :tag "Very short identifier" :slug)
+                                  (symbol :tag "Face attribute")
+                                  :tag "Property")
+                       :value-type (choice :tag "Value" string symbol)
+                       :tag "Face specification")))
   :group 'engrave-faces)
 
 (defun engrave-faces--check-nondefault (attr value)
@@ -298,7 +372,7 @@ Unconditionally returns nil when FACES is default."
     ((and (pred listp) (app length 1)) (assoc (car faces) engrave-faces-preset-styles))))
 
 (defun engrave-faces-generate-preset ()
-  "Generate `engrave-faces-preset-styles' based on the current theme."
+  "Generate a preset style based on the current Emacs theme."
   (mapcar
    (lambda (face-style)
      (apply #'append
@@ -311,10 +385,69 @@ Unconditionally returns nil when FACES is default."
                      (let ((attr-val (when (facep (car face-style))
                                        (face-attribute (car face-style) attr nil t))))
                        (when (or (engrave-faces--check-nondefault attr attr-val)
-                                 (eq (car face-style) 'default))
+                                 (and (eq (car face-style) 'default)
+                                      (not (memq attr '(:height :strike-through)))))
                          (list attr attr-val))))
                    engrave-faces-attributes-of-interest))))
    engrave-faces-preset-styles))
+
+(defun engrave-faces-get-theme (theme &optional noput)
+  "Obtain the preset style for THEME.
+Unless NOPUT is non-nil, the preset will be added to `engrave-faces-themes'.
+The theme t is treated as shorthand for the current theme."
+  (when (eq theme t)
+    (setq theme (car custom-enabled-themes)))
+  (if-let ((theme-preset (alist-get theme engrave-faces-themes)))
+      (setq engrave-faces-current-preset-style theme-preset)
+    (if (or (eq theme (car custom-enabled-themes))
+            (memq theme (custom-available-themes)))
+        (let ((spec
+               (if (eq theme (car custom-enabled-themes))
+                   (engrave-faces-generate-preset)
+                 (let ((old-theme (car custom-enabled-themes))
+                       spec)
+                   (load-theme theme t)
+                   (setq spec (engrave-faces-generate-preset))
+                   (load-theme old-theme t)
+                   (redraw-display)
+                   spec))))
+          (unless noput
+            (push (cons theme spec) engrave-faces-themes))
+          spec)
+      (user-error "Theme `%s' is not found in `engrave-faces-current-preset-style' or availible Emacs themes." theme))))
+
+(defun engrave-faces-use-theme (&optional theme insert-def)
+  "Select a THEME an apply it as the current engraved preset style.
+When INSERT-DEF is non-nil, or the universal argument has been provided, an
+expression adding THEME to `engrave-faces-themes' shall be inserted into the
+current buffer at point."
+  (interactive (list (intern
+                      (completing-read
+                       "Theme: "
+                       (cl-remove-duplicates
+                        (append
+                         (mapcar
+                          (lambda (theme)
+                            (propertize (symbol-name theme) 'face '(italic font-lock-doc-face)))
+                          (custom-available-themes))
+                         (list (propertize (symbol-name (car custom-enabled-themes))
+                                           'face '(bold font-lock-comment-face)))
+                         (mapcar #'car engrave-faces-themes)))))
+                     (when current-prefix-arg t)))
+  (unless theme
+    (setq theme (car custom-enabled-themes)))
+  (let ((spec (engrave-faces-get-theme theme)))
+    (if insert-def
+        (engrave-faces--insert-theme-def theme spec)
+      (setq engrave-faces-current-preset-style spec))))
+
+(defun engrave-faces--insert-theme-def (name &optional spec)
+  "Insert a definition for the theme NAME with a certain SPEC into the buffer."
+  (insert (pp
+           `(add-to-list
+             'engrave-faces-themes
+             ',(cons name (or spec
+                              (engrave-faces-get-theme name)))))))
 
 (provide 'engrave-faces)
 ;;; engrave-faces.el ends here
