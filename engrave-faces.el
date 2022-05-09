@@ -6,7 +6,7 @@
 ;; Maintainer: TEC <tec@tecosaur.com>
 ;; Created: January 18, 2021
 ;; Modified: July 10, 2021
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Keywords: faces
 ;; Homepage: https://github.com/tecosaur/engrave-faces
 ;; Package-Requires: ((emacs "27.1"))
@@ -263,7 +263,7 @@ This function is lifted from htmlize."
 (defcustom engrave-faces-themes
   '((default .
       (;; faces.el --- excluding: bold, italic, bold-italic, underline, and some others
-       (default                             :short "default"             :slug "D"   :foreground "#000000")
+       (default                             :short "default"             :slug "D"   :foreground "#000000" :background "#ffffff")
        (shadow                              :short "shadow"              :slug "h"   :foreground "#7f7f7f")
        (success                             :short "success"             :slug "sc"  :foreground "#228b22" :weight bold)
        (warning                             :short "warning"             :slug "w"   :foreground "#ff8e00" :weight bold)
@@ -398,7 +398,7 @@ The theme t is treated as shorthand for the current theme."
   (when (eq theme t)
     (setq theme (car custom-enabled-themes)))
   (if-let ((theme-preset (alist-get theme engrave-faces-themes)))
-      (setq engrave-faces-current-preset-style theme-preset)
+      theme-preset
     (if (or (eq theme (car custom-enabled-themes))
             (memq theme (custom-available-themes)))
         (let ((spec
