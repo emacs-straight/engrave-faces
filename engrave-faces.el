@@ -42,71 +42,30 @@
 
 (defgroup engrave-faces nil
   "Export buffers with font-lock information to other formats."
-  :group 'hypermedia)
+  :group 'hypermedia
+  :prefix "engrave-faces-")
 
 (defcustom engrave-faces-attributes-of-interest
   '(:family :foreground :background :slant :weight :height :strike-through)
   "Attributes which sould be paid attention to."
-  :group 'engrave-faces
   :type '(repeat symbol))
 
 (defcustom engrave-faces-before-hook nil
   "Hook run before engraving a buffer.
 The hook functions are run in the source buffer (not the resulting buffer)."
-  :group 'engrave-faces
   :type 'hook)
 
 (defcustom engrave-faces-after-hook nil
   "Hook run after engraving a buffer.
 Unlike `engrave-faces-before-hook', these functions are run in the generated
 buffer.  You may use them to modify the outlook of the final output."
-  :group 'engrave-faces
   :type 'hook)
 
 (defcustom engrave-faces-log-preset-missed-faces nil
   "Whether to log faces not found in `engrave-faces-current-preset-style'."
-  :type 'boolean
-  :group 'engrave-faces)
+  :type 'boolean)
 
 (define-obsolete-variable-alias 'engrave-faces-preset-styles 'engrave-faces-current-preset-style "0.3")
-
-(defcustom engrave-faces-current-preset-style
-  (alist-get 'default engrave-faces-themes)
-  "Overriding face values.
-
-This is constructed as an alist of faces, and their face attributes as a plist.
-For example, the \"default\" face could be specified by:
-
-  (default :foreground \"#000000\" :background \"#FFFFFF\")
-
-By setting :foreground, :background, etc. a certain theme can be
-set for the faces. The face attributes here will also be used
-when calculating inherited styles. Note that colours must be
-given in hexadecimal form.
-
-Faces here will represented more compactly when possible, by using the
-:short or :slug parameter to produce a named version styles,
-- :short should be a descriptive string comprised of the character class
-  [A-Za-z0-9-_]
-- :slug should be a compact string (i.e. as short as possible), comprised of the
-  character class [A-Za-Z]
-
-For example, for the \"default\" face,
-
-  (default :short \"def\" :slug \"D\"
-           :foreground \"#000000\" :background \"#FFFFFF\")
-
-Other faces will need to be styled explicitly each time they are used."
-  :type '(repeat
-          (cons (symbol :tag "Face")
-                (plist :key-type (choice
-                                  (const :tag "Short identifier" :short)
-                                  (const :tag "Very short identifier" :slug)
-                                  (symbol :tag "Face attribute")
-                                  :tag "Property")
-                       :value-type (choice :tag "Value" string symbol)
-                       :tag "Face specification")))
-  :group 'engrave-faces)
 
 (defcustom engrave-faces-themes
   '((default .
@@ -180,8 +139,44 @@ cdrs in the form of `engrave-faces-current-preset-style'."
                                    (symbol :tag "Face attribute")
                                    :tag "Property")
                         :value-type (choice :tag "Value" string symbol)
-                        :tag "Face specification"))))
-  :group 'engrave-faces)
+                        :tag "Face specification")))))
+
+(defcustom engrave-faces-current-preset-style
+  (alist-get 'default engrave-faces-themes)
+  "Overriding face values.
+
+This is constructed as an alist of faces, and their face attributes as a plist.
+For example, the \"default\" face could be specified by:
+
+  (default :foreground \"#000000\" :background \"#FFFFFF\")
+
+By setting :foreground, :background, etc. a certain theme can be
+set for the faces. The face attributes here will also be used
+when calculating inherited styles. Note that colours must be
+given in hexadecimal form.
+
+Faces here will represented more compactly when possible, by using the
+:short or :slug parameter to produce a named version styles,
+- :short should be a descriptive string comprised of the character class
+  [A-Za-z0-9-_]
+- :slug should be a compact string (i.e. as short as possible), comprised of the
+  character class [A-Za-Z]
+
+For example, for the \"default\" face,
+
+  (default :short \"def\" :slug \"D\"
+           :foreground \"#000000\" :background \"#FFFFFF\")
+
+Other faces will need to be styled explicitly each time they are used."
+  :type '(repeat
+          (cons (symbol :tag "Face")
+                (plist :key-type (choice
+                                  (const :tag "Short identifier" :short)
+                                  (const :tag "Very short identifier" :slug)
+                                  (symbol :tag "Face attribute")
+                                  :tag "Property")
+                       :value-type (choice :tag "Value" string symbol)
+                       :tag "Face specification"))))
 
 (defvar engrave-faces-preset-missed-faces nil
   "Faces not found in `engrave-faces-current-preset-style'.")
