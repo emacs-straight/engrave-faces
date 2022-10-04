@@ -1,9 +1,9 @@
 ;;; engrave-faces.el --- Convert font-lock faces to other formats -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2021 Free Software Foundation, Inc.
+;; Copyright (C) 2021-2022 Free Software Foundation, Inc.
 
-;; Author: TEC <https://github/tecosaur>
-;; Maintainer: TEC <tec@tecosaur.com>
+;; Author: TEC <https://git.tecosaur.net/>
+;; Maintainer: TEC <contact@tecosaur.net>
 ;; Created: January 18, 2021
 ;; Modified: July 10, 2021
 ;; Version: 0.3.1
@@ -291,6 +291,8 @@ If a POSTPROCESSOR function is provided, it is called before saving."
                                   (let ((prop (get-text-property (point) 'face)))
                                     (cond
                                      ((null prop) 'default)
+                                     ;; FIXME: Why/where/when does the `face'
+                                     ;; property take a value (quote X)?
                                      ((and (listp prop) (eq (car prop) 'quote))
                                       (eval prop t))
                                      (t prop)))
